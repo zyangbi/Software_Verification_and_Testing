@@ -113,8 +113,22 @@ struct Assignment1 : public FunctionPass {
   // in the "BuggyLines" vector.
   unordered_set<Value *> entrySet, exitSet;
 
+  void PrintEntrySet(Instruction *I) {
+    debug << "\n\n";
+
+    debug << "EntrySet\n";
+    for (auto element : entrySet) {
+      element->print(debug);
+      debug << "\n";
+    }
+
+    debug << "Instruction\n";
+    I->print(debug);
+    debug << "\n";
+
+  }
+
   void checkUseBeforeDef(Instruction *I, BasicBlock *b) {
-    entrySet.clear();
 
     bool isBug = false;
 
@@ -124,24 +138,41 @@ struct Assignment1 : public FunctionPass {
 
     // Add code here...
     if (AllocaInst *allocIns = dyn_cast<AllocaInst>(I)) {
-      addDebugMetaData(I, "This_is_an_alloca_instruction");
+
+      // debug
+      // PrintEntrySet(I);
+
       entrySet.insert(allocIns);
       allocIns->getOperand(0);
     } else if (StoreInst *storeIns = dyn_cast<StoreInst>(I)) {
-      addDebugMetaData(I, "This_is_an_store_instruction");
       Value *value = storeIns->getValueOperand();
       Value *pointer = storeIns->getPointerOperand();
+
+      // debug
+      PrintEntrySet(I);
+
       if (entrySet.count(pointer)) {
         entrySet.erase(pointer);
+
+        debug << "Erase\n";
+        pointer->print(debug);
+        debug << "\n";
       } 
       if (entrySet.count(value)) {
         entrySet.insert(pointer);
         isBug = true;
+
+        debug << "Insert\n";
+        pointer->print(debug);
+        debug << "\n";
       }
       
     } else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
-      addDebugMetaData(I, "This_is_an_load_instruction");
-          // Load Instruction
+
+      // debug
+      // PrintEntrySet(I);
+
+      // Load Instruction
       Value *pointerOperand = loadIns->getPointerOperand();
       if (entrySet.count(pointerOperand)) {
         isBug = true;
@@ -188,9 +219,7 @@ struct Assignment1 : public FunctionPass {
 
       // Iterate over all the instructions within a basic block.
       for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
-
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
-        addDebugMetaData(ins, "This_is_an_instruction");
         checkUseBeforeDef(ins, b);
       }
     }
