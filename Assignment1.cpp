@@ -112,12 +112,10 @@ struct Assignment1 : public FunctionPass {
   // The function should insert the buggy line numbers
   // in the "BuggyLines" vector.
   unordered_set<Value *> entrySet;
-  unordered_map<BasicBlock *, unordered_set<Value *>> exitSet;
+  unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
 
   void PrintEntrySet(Instruction *I) {
-    debug << "\n\n";
-
-    debug << "EntrySet\n";
+    debug << "\n\nEntrySet\n";
     for (auto element : entrySet) {
       element->print(debug);
       debug << "\n";
@@ -169,9 +167,7 @@ struct Assignment1 : public FunctionPass {
         pointer->print(debug);
         debug << "\n";
       } 
-
     } 
-    
     
     // Load Instruction
     else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
@@ -185,14 +181,13 @@ struct Assignment1 : public FunctionPass {
         isBug = true;
         entrySet.insert(loadIns);
       }
-
     }
-
 
     if (isBug) {
       int line = getSourceCodeLine(I);
 
-      debug << "Is Bug\n";
+      PrintEntrySet(I);
+      debug << "Bug Instruction\n";
       I->print(debug);
       debug << "\n";
 
@@ -226,15 +221,27 @@ struct Assignment1 : public FunctionPass {
     debug << funcName << "\n";
     debug << "--------------------------"
           << "\n\n";
+    
+    // Clear entrySet and exitSetMap at the start of function
+    entrySet.clear();
+    exitSetMap.clear();
 
     // Iterate through basic blocks of the function.
     for (auto b : topoSortBBs(F)) {
+      // EntrySet of a basic block is the union of all exitSets of the predecessors
+      for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
+        unordered_set<Value *> predExitSet = exitSetMap[*pred_it];
+        entrySet.insert(predExitSet.begin(), predExitSet.end());
+      }
 
       // Iterate over all the instructions within a basic block.
       for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
         checkUseBeforeDef(ins, b);
       }
+
+      // Save final entrySet into exitSetMap
+      exitSetMap[b] = entrySet;
     }
 
     // Export data from Set to Vector
