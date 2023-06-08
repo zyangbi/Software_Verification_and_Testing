@@ -111,7 +111,8 @@ struct Assignment1 : public FunctionPass {
   // Complete this function.
   // The function should insert the buggy line numbers
   // in the "BuggyLines" vector.
-  unordered_set<Value *> entrySet, exitSet;
+  unordered_set<Value *> entrySet;
+  unordered_map<BasicBlock *, unordered_set<Value *>> exitSet;
 
   void PrintEntrySet(Instruction *I) {
     debug << "\n\n";
@@ -131,33 +132,26 @@ struct Assignment1 : public FunctionPass {
   void checkUseBeforeDef(Instruction *I, BasicBlock *b) {
 
     bool isBug = false;
-
-    // Add MetaData to an Alloca instruction.
-    // if (isa<llvm::AllocaInst>(I))
-    //   addDebugMetaData(I, "This_is_an_alloca_instruction");
-
-    // Add code here...
+    
+    // Alloca instruction
     if (AllocaInst *allocIns = dyn_cast<AllocaInst>(I)) {
 
       // debug
-      // PrintEntrySet(I);
-
+      PrintEntrySet(I);
       entrySet.insert(allocIns);
-      allocIns->getOperand(0);
-    } else if (StoreInst *storeIns = dyn_cast<StoreInst>(I)) {
+
+    } 
+    
+    
+    // Store Instruction
+    else if (StoreInst *storeIns = dyn_cast<StoreInst>(I)) {
       Value *value = storeIns->getValueOperand();
       Value *pointer = storeIns->getPointerOperand();
 
       // debug
       PrintEntrySet(I);
 
-      if (entrySet.count(pointer)) {
-        entrySet.erase(pointer);
-
-        debug << "Erase\n";
-        pointer->print(debug);
-        debug << "\n";
-      } 
+      // If value is in EntrySet, this is a bug
       if (entrySet.count(value)) {
         entrySet.insert(pointer);
         isBug = true;
@@ -166,23 +160,42 @@ struct Assignment1 : public FunctionPass {
         pointer->print(debug);
         debug << "\n";
       }
-      
-    } else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
+
+      // If value not in EntrySet and pointer in EntrySet, remove pointer from EntrySet
+      else if (entrySet.count(pointer)) {
+        entrySet.erase(pointer);
+
+        debug << "Erase\n";
+        pointer->print(debug);
+        debug << "\n";
+      } 
+
+    } 
+    
+    
+    // Load Instruction
+    else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
 
       // debug
-      // PrintEntrySet(I);
+      PrintEntrySet(I);
 
       // Load Instruction
       Value *pointerOperand = loadIns->getPointerOperand();
       if (entrySet.count(pointerOperand)) {
         isBug = true;
+        entrySet.insert(loadIns);
       }
-      entrySet.insert(loadIns);
+
     }
 
 
     if (isBug) {
       int line = getSourceCodeLine(I);
+
+      debug << "Is Bug\n";
+      I->print(debug);
+      debug << "\n";
+
       if (line > 0)
         BuggyLines.push_back(line);
     }
