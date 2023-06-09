@@ -93,7 +93,11 @@ struct Assignment1 : public FunctionPass {
 
   // Vector to store the line numbers at which undefined
   // variable(s) is(are) used.
-  vector<int> BuggyLines;
+  unordered_set<int> BuggyLines;
+  
+  // EntrySet and ExitSet
+  unordered_set<Value *> entrySet;
+  unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
 
   // Keep track of all the functions we have encountered so far.
   unordered_map<string, bool> funcNames;
@@ -111,71 +115,37 @@ struct Assignment1 : public FunctionPass {
   // Complete this function.
   // The function should insert the buggy line numbers
   // in the "BuggyLines" vector.
-  unordered_set<Value *> entrySet;
-  unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
-
-  void PrintEntrySet(Instruction *I) {
-    debug << "\n\nEntrySet\n";
-    for (auto element : entrySet) {
-      element->print(debug);
-      debug << "\n";
-    }
-
-    debug << "Instruction\n";
-    I->print(debug);
-    debug << "\n";
-
-  }
-
   void checkUseBeforeDef(Instruction *I, BasicBlock *b) {
 
     bool isBug = false;
-    
+
+    // Add MetaData to an Alloca instruction.
+    // if (isa<llvm::AllocaInst>(I))
+    //   addDebugMetaData(I, "This_is_an_alloca_instruction");
+
+    // Add code here...
     // Alloca instruction
     if (AllocaInst *allocIns = dyn_cast<AllocaInst>(I)) {
-
-      // debug
-      PrintEntrySet(I);
       entrySet.insert(allocIns);
-
     } 
-    
     
     // Store Instruction
     else if (StoreInst *storeIns = dyn_cast<StoreInst>(I)) {
       Value *value = storeIns->getValueOperand();
       Value *pointer = storeIns->getPointerOperand();
-
-      // debug
-      PrintEntrySet(I);
-
       // If value is in EntrySet, this is a bug
       if (entrySet.count(value)) {
         entrySet.insert(pointer);
         isBug = true;
-
-        debug << "Insert\n";
-        pointer->print(debug);
-        debug << "\n";
       }
-
       // If value not in EntrySet and pointer in EntrySet, remove pointer from EntrySet
       else if (entrySet.count(pointer)) {
         entrySet.erase(pointer);
-
-        debug << "Erase\n";
-        pointer->print(debug);
-        debug << "\n";
       } 
     } 
     
     // Load Instruction
     else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
-
-      // debug
-      PrintEntrySet(I);
-
-      // Load Instruction
       Value *pointerOperand = loadIns->getPointerOperand();
       if (entrySet.count(pointerOperand)) {
         isBug = true;
@@ -185,14 +155,8 @@ struct Assignment1 : public FunctionPass {
 
     if (isBug) {
       int line = getSourceCodeLine(I);
-
-      PrintEntrySet(I);
-      debug << "Bug Instruction\n";
-      I->print(debug);
-      debug << "\n";
-
       if (line > 0)
-        BuggyLines.push_back(line);
+        BuggyLines.insert(line);
     }
 
     return;
@@ -216,19 +180,19 @@ struct Assignment1 : public FunctionPass {
     funcNames.insert(make_pair(funcName, true));
 
     // Demangle function name and print it.
-    debug << "\n\n---------New Function---------"
-          << "\n";
-    debug << funcName << "\n";
-    debug << "--------------------------"
-          << "\n\n";
-    
-    // Clear entrySet and exitSetMap at the start of function
-    entrySet.clear();
-    exitSetMap.clear();
+    // debug << "\n\n---------New Function---------"
+    //       << "\n";
+    // debug << funcName << "\n";
+    // debug << "--------------------------"
+    //       << "\n\n";
 
+    // Clear exitSetMap at the start of function
+    exitSetMap.clear();
+    
     // Iterate through basic blocks of the function.
     for (auto b : topoSortBBs(F)) {
       // EntrySet of a basic block is the union of all exitSets of the predecessors
+      entrySet.clear();
       for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
         unordered_set<Value *> predExitSet = exitSetMap[*pred_it];
         entrySet.insert(predExitSet.begin(), predExitSet.end());
@@ -236,10 +200,11 @@ struct Assignment1 : public FunctionPass {
 
       // Iterate over all the instructions within a basic block.
       for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
+
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
         checkUseBeforeDef(ins, b);
       }
-
+      
       // Save final entrySet into exitSetMap
       exitSetMap[b] = entrySet;
     }
