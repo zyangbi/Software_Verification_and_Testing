@@ -2,6 +2,3 @@ Tutorial2-LLVM_Demo.md
 *.ll
 *.png
 *.dot
-Test*.cpp
-HelloWorld*
-HeapSort*
