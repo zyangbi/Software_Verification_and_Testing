@@ -218,10 +218,10 @@ struct Assignment1 : public FunctionPass {
     // Sort vector
     std::sort(temp.begin(), temp.end());
 
-    // Print the source code line number(s).
-    for (auto line : temp) {
-      output << funcName << " : " << line << "\n";
-    }
+    // // Print the source code line number(s).
+    // for (auto line : temp) {
+    //   output << funcName << " : " << line << "\n";
+    // }
 
 // Print debug string if __DEBUG__ is enabled.
 #ifdef __DEBUG__
