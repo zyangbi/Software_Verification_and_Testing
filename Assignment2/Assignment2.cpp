@@ -49,36 +49,41 @@ public:
     if (funcName != "main") {
       return false;
     }
+    
+    // while (1) {
+    // Iterate through basic blocks of the function.
+    for (auto b : topoSortBBs(F)) {
+      taintSet.clear();
 
-    // Clear exitSetMap at the start of function
-    exitSetMap.clear();
-
-    while (statusChanged) {
-      statusChanged = false;
-      // Iterate through basic blocks of the function.
-      for (auto b : topoSortBBs(F)) {
-        // EntrySet of a basic block is the union of all exitSets of the predecessors
-        entrySet.clear();
-        for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
+      // EntrySet of a basic block is the union of all exitSets of the predecessors
+      for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
         unordered_set<Value *> predExitSet = exitSetMap[*pred_it];
-        entrySet.insert(predExitSet.begin(), predExitSet.end());
-        }
-        // Iterate over all the instructions within a basic block.
-        for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
+        taintSet.insert(predExitSet.begin(), predExitSet.end());
+      }
+
+
+      // Iterate over all the instructions within a basic block, update taintSet. 
+      for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
+        
+        debug << "\n\n";
+
+
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
         checkTainted(ins, b);
-        }
-        // Save final entrySet into exitSetMap
-          exitSetMap[b] = entrySet;
-      }
-    }
 
-    // Print tainted variables in the final entrySet(exitSetMap[b])
-    output << "{";
-    for (auto taintedVar : entrySet) {
-      output  << taintedVar->getName() << ",";
+
+        ins->print(debug);
+        debug << "\n";
+        printTaintSet();        
+      }
+
+      // Save final taintSet into exitSetMap
+      exitSetMap[b] = taintSet;
     }
-    output << "}";
+    // }
+
+    // Print tainted variables in the last taintSet
+    // printTaintSet();
 
     // Print debug string if __DEBUG__ is enabled.
     #ifdef __DEBUG__
@@ -96,79 +101,102 @@ public:
 
 
 private:
-  unordered_set<Value *> entrySet;
+  unordered_set<Value *> taintSet;
+  unordered_map<BasicBlock *, unordered_set<Value *>> entrySetMap;
   unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
   unordered_set<BasicBlock *> straightLineBBs;
-  bool statusChanged = true;
 
   // Complete this function.
   void checkTainted(Instruction *I, BasicBlock *b) {
 
-    // 3 possibilies of tainting a variable
+    // Load from cin (pointer)
     if (CallInst* callInst = dyn_cast<CallInst>(I)) {
-      debug << "1\n";
-      // 1. find cin assignments
-      std::string instructionStr;
-          llvm::raw_string_ostream instructionStream(instructionStr);
-          I->print(instructionStream);
-      debug << instructionStream.str() << "\n";
-      if (demangle(I->getOperand(0)->getName().str().c_str()) == "cin") {
-        // Get the variable being assigned to, which is tainted at this point
-        Value* variable = callInst->getArgOperand(0);
-        // Process the assignment from cin to the variable
-        statusChanged = true;
-        entrySet.insert(variable);
-        debug << "A var was just tainted due to cin: " << variable->getName() << "\n";
-      }
-    } else if (StoreInst* storeInst = dyn_cast<StoreInst>(I)) {
-      debug << "in\n";
-      Value* value = storeInst->getValueOperand();
-          Value* pointer = storeInst->getPointerOperand();
-      // Check if the store instruction assigns the return value of a function
-          if (auto* callInst = dyn_cast<CallInst>(value)) {
-        Function* calledFunction = callInst->getCalledFunction();
-        if (calledFunction && isTaintedArgument(calledFunction)) {
-          // 2. find tainted vars passed to function
-          statusChanged = true;
-          entrySet.insert(pointer);
-          debug << "A var was just tainted due to tainted function param: " << pointer->getName() << "\n";
-        }
-      } else if (isInTaintedSet(value)) {
-        debug << "5\n";
-        // 3. find assignments from a tainted var to another var
-        statusChanged = true;
-        entrySet.insert(pointer);
-        debug << "Tainted variable " << value->getName() << " assigned to " << pointer->getName() << "\n";
-      } else {
-        debug << "7\n";
-        if (isInTaintedSet(pointer)) {
-          // untainting a variable
-          debug << "8\n";
-          entrySet.erase(pointer);
-          statusChanged = true;
-          debug << "Tainted variable " << pointer->getName() << "is now untainted by assigning " << value->getName() << " to it." << "\n";
-        }
+      if (callInst->getOperand(0)->getName().str().find("cin") != string::npos) {
+        Value* input = callInst->getOperand(1);
+        taintSet.insert(input);
+        debug << "A var was just tainted due to cin: " << input->getName() << "\n";
       }
     }
+
+    else if (StoreInst* storeInst = dyn_cast<StoreInst>(I)) {
+      Value *value = storeInst->getValueOperand();
+      Value *pointer = storeInst->getPointerOperand();
+
+      // 2. Assign return value of a function call to another var
+      // If any argument is tainted, assigned var is tainted; otherwise, assigned var is untainted.
+      if (CallInst *callInst = dyn_cast<CallInst>(value)) {
+        bool tainted = false;
+        Value *arg;
+        for (auto argIt = callInst->arg_begin(); argIt != callInst->arg_end(); ++argIt) {
+          arg = *argIt;
+          if (isInTaintSet(arg)) {
+            tainted = true;
+            break;
+          }
+        }
+        if (tainted) {
+          taintSet.insert(pointer);
+          debug << "Return value " << callInst->getName() << " tainted by " << arg->getName() << "\n";
+        }
+      }
+
+      // 3. Assign a tainted var to another var
+      if (isInTaintSet(value)) {
+        taintSet.insert(pointer);
+        debug << "Tainted variable " << value->getName() << " stored to " << pointer->getName() << "\n";
+      }
+      
+      // else {
+        // // debug << "7\n";
+        // if (isInTaintSet(pointer)) {
+        //   // untainting a variable
+        //   // debug << "8\n";
+        //   taintSet.erase(pointer);
+        //   debug << "Tainted variable " << pointer->getName() << "is now untainted by assigning " << value->getName() << " to it." << "\n";
+        // }
+      // }
+    } // if StroeInst
+
+    // 4. load from a tainted var to another
+    else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
+      Value *pointer = loadIns->getPointerOperand();
+
+
+      if (isInTaintSet(pointer)) {
+        taintSet.insert(loadIns);
+        debug << "Tainted variable " << pointer->getName() << " loaded to " << loadIns->getName() << "\n";
+      }
+    } // if loadInst
 
     return;
   } //checkTainted
 
-  bool isInTaintedSet(Value *variable) {
-    return entrySet.find(variable) != entrySet.end();
+  bool isInTaintSet(Value *variable) {
+    return taintSet.find(variable) != taintSet.end();
   }
 
-  bool isTaintedArgument(Function *calledFunction) {
+  bool hasTaintedArgument(Function *calledFunction) {
     for (auto arg = calledFunction->arg_begin(); arg != calledFunction->arg_end(); ++arg) {
       Value *argument = &(*arg);
+
       // Check if the argument is a tainted variable
-      if (isInTaintedSet(argument)) {
+      if (isInTaintSet(argument)) {
         return true;
       }
-      }
+    }
     return false;
   }
 
+  void printTaintSet() {
+    debug << "{";
+    for (Value *taint : taintSet) {
+      string taintName = taint->getName().str();
+      if (!taintName.empty()) {
+        debug << taintName << ",";
+      }
+    }
+    debug << "}\n\n";
+  }
 
   // Reset all global variables when a new function is called.
   void cleanGlobalVariables() {
