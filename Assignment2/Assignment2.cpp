@@ -32,85 +32,149 @@ raw_string_ostream output(output_str);
 
 namespace {
 class Assignment2 : public FunctionPass {
-  public:
-    static char ID;
+public:
+  static char ID;
 
+  Assignment2() : FunctionPass(ID) {}
 
-    // Reset all global variables when a new function is called.
-    void cleanGlobalVariables() {
-      output_str = "";
-      debug_str = "";
+  // Add DominatorTree
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.setPreservesAll();
+  }
+
+  bool runOnFunction(Function &F) override {
+    // Only consider "main" function
+    string funcName = demangle(F.getName().str().c_str());
+    if (funcName != "main") {
+      return false;
     }
 
-    Assignment2() : FunctionPass(ID) {}
+    // Clear exitSetMap at the start of function
+    exitSetMap.clear();
 
-    // Add DominatorTree
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<DominatorTreeWrapperPass>();
-      AU.setPreservesAll();
+    while (statusChanged) {
+      statusChanged = false;
+      // Iterate through basic blocks of the function.
+      for (auto b : topoSortBBs(F)) {
+        // EntrySet of a basic block is the union of all exitSets of the predecessors
+        entrySet.clear();
+        for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
+        unordered_set<Value *> predExitSet = exitSetMap[*pred_it];
+        entrySet.insert(predExitSet.begin(), predExitSet.end());
+        }
+        // Iterate over all the instructions within a basic block.
+        for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
+        Instruction *ins = const_cast<llvm::Instruction *>(&*It);
+        checkTainted(ins, b);
+        }
+        // Save final entrySet into exitSetMap
+          exitSetMap[b] = entrySet;
+      }
     }
 
-    // Function to return tainted variables
-    bool runOnFunction(Function &F) override {
-      // Only consider "main" function
-      string funcName = demangle(F.getName().str().c_str());
-      if (funcName != "main") {
-        return false;
+    // Print tainted variables in the final entrySet(exitSetMap[b])
+    output << "{";
+    for (auto taintedVar : entrySet) {
+      output  << taintedVar->getName() << ",";
+    }
+    output << "}";
+
+    // Print debug string if __DEBUG__ is enabled.
+    #ifdef __DEBUG__
+    errs() << debug.str();
+    #endif
+    debug.flush();
+
+    // Print output
+    errs() << output.str();
+    output.flush();
+
+    cleanGlobalVariables();
+    return false;
+  }
+
+
+private:
+  unordered_set<Value *> entrySet;
+  unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
+  unordered_set<BasicBlock *> straightLineBBs;
+  bool statusChanged = true;
+
+  // Complete this function.
+  void checkTainted(Instruction *I, BasicBlock *b) {
+
+    // 3 possibilies of tainting a variable
+    if (CallInst* callInst = dyn_cast<CallInst>(I)) {
+      debug << "1\n";
+      // 1. find cin assignments
+      std::string instructionStr;
+          llvm::raw_string_ostream instructionStream(instructionStr);
+          I->print(instructionStream);
+      debug << instructionStream.str() << "\n";
+      if (demangle(I->getOperand(0)->getName().str().c_str()) == "cin") {
+        // Get the variable being assigned to, which is tainted at this point
+        Value* variable = callInst->getArgOperand(0);
+        // Process the assignment from cin to the variable
+        statusChanged = true;
+        entrySet.insert(variable);
+        debug << "A var was just tainted due to cin: " << variable->getName() << "\n";
       }
-      // debug << "\n\n---------New Function---------"
-      //       << "\n";
-      // debug << funcName << "\n";
-      // debug << "--------------------------"
-      //       << "\n\n";
-      
-
-      //---------------------------------------------------------
-      // My code
-      //---------------------------------------------------------
-
-
-      straightLineBBs.clear();
-      DominatorTree &domTree = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-
-      if (!getStraightLineBBs(F, domTree)) { // result saves to straightLineBBs
-        debug << "\n\n ------------getStraightLineBBs Fail-----------------";
-        return false;
-      }
-
-      for (BasicBlock *BB : topoSortBBs(F)) {
-        for (Instruction &I : *BB) {
-          if (isStraightLine(&I)) {
-            debug << getSourceCodeLine(&I) << "\n";
-          }           
+    } else if (StoreInst* storeInst = dyn_cast<StoreInst>(I)) {
+      debug << "in\n";
+      Value* value = storeInst->getValueOperand();
+          Value* pointer = storeInst->getPointerOperand();
+      // Check if the store instruction assigns the return value of a function
+          if (auto* callInst = dyn_cast<CallInst>(value)) {
+        Function* calledFunction = callInst->getCalledFunction();
+        if (calledFunction && isTaintedArgument(calledFunction)) {
+          // 2. find tainted vars passed to function
+          statusChanged = true;
+          entrySet.insert(pointer);
+          debug << "A var was just tainted due to tainted function param: " << pointer->getName() << "\n";
+        }
+      } else if (isInTaintedSet(value)) {
+        debug << "5\n";
+        // 3. find assignments from a tainted var to another var
+        statusChanged = true;
+        entrySet.insert(pointer);
+        debug << "Tainted variable " << value->getName() << " assigned to " << pointer->getName() << "\n";
+      } else {
+        debug << "7\n";
+        if (isInTaintedSet(pointer)) {
+          // untainting a variable
+          debug << "8\n";
+          entrySet.erase(pointer);
+          statusChanged = true;
+          debug << "Tainted variable " << pointer->getName() << "is now untainted by assigning " << value->getName() << " to it." << "\n";
         }
       }
+    }
 
-      for (auto bb: straightLineBBs) {
-        // debug << bb->getName() << "\n";
+    return;
+  } //checkTainted
+
+  bool isInTaintedSet(Value *variable) {
+    return entrySet.find(variable) != entrySet.end();
+  }
+
+  bool isTaintedArgument(Function *calledFunction) {
+    for (auto arg = calledFunction->arg_begin(); arg != calledFunction->arg_end(); ++arg) {
+      Value *argument = &(*arg);
+      // Check if the argument is a tainted variable
+      if (isInTaintedSet(argument)) {
+        return true;
       }
-      
+      }
+    return false;
+  }
 
 
-      //----------------------------------------------------------
-      // End
-      //----------------------------------------------------------
-
-      // Print debug string if __DEBUG__ is enabled.
-      #ifdef __DEBUG__
-      errs() << debug.str();
-      #endif
-      debug.flush();
-
-      // Print output
-      errs() << output.str();
-      output.flush();
-
-      cleanGlobalVariables();
-      return false;
-    } // runOnFunction
-
-private:    
-  unordered_set<BasicBlock *> straightLineBBs;
+  // Reset all global variables when a new function is called.
+  void cleanGlobalVariables() {
+    output_str = "";
+    debug_str = "";
+  }
 
   // Demangles the function name.
   std::string demangle(const char *name) {
@@ -201,7 +265,7 @@ private:
     return straightLineBBs.count(block);
   }
 
-}; // Assignment2 (FunctionPass)
+}; // Assignment2
 } // namespace
 
 char Assignment2::ID = 0;
