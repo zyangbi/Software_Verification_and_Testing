@@ -117,21 +117,17 @@ private:
   // Complete this function.
   void checkTainted(Instruction *I, BasicBlock *b) {
 
-    // 1. Variable loaded from cin is tainted
+    // Call Instruction
     if (CallInst* callInst = dyn_cast<CallInst>(I)) {
+      // 1. Return value of cin is tainted
       if (callInst->getOperand(0)->getName().str().find("cin") != string::npos) {
         Value* input = callInst->getOperand(1);
         taintSet.insert(input);
         debug << "-------------Variable " << input->getName() << " tainted by cin-------------\n";
       }
-    }
 
-    else if (StoreInst* storeInst = dyn_cast<StoreInst>(I)) {
-      Value *value = storeInst->getValueOperand();
-      Value *pointer = storeInst->getPointerOperand();
-
-      // 2. Assign return value of a function call to another var
-      if (CallInst *callInst = dyn_cast<CallInst>(value)) {
+      // 2. Return value of a function call
+      else {
         bool tainted = false;
         for (auto argIt = callInst->arg_begin(); argIt != callInst->arg_end(); ++argIt) {
           Value *arg = *argIt;
@@ -142,39 +138,47 @@ private:
         }
 
         if (tainted) {
-          // Assigned var is tainted if any argument is tainted
-          taintSet.insert(pointer);
-          debug << "-------------Return value " << pointer->getName() << " tainted by function call " << value->getName() << "--------------\n";
-        } else if (isStraightLine(storeInst)) {
-          // Assigned var is untainted if all arguments are not tainted and in straigt line code
-          taintSet.erase(pointer);
-          debug << "-------------Return value " << pointer->getName() << " untainted by function call " << value->getName() << "--------------\n";
+          // Return value is tainted if any argument is tainted
+          taintSet.insert(callInst);
+          debug << "-------------Return value " << callInst->getName() << " is tainted by function call " << "--------------\n";
+        } else if (isStraightLine(callInst)) {
+          // Return value is untainted if all arguments are not tainted and in straigt line code
+          taintSet.erase(callInst);
+          debug << "-------------Return value " << callInst->getName() << " is untainted by function call " << "--------------\n";
         }
       }
 
+    }
+
+    // Store Instruction
+    else if (StoreInst* storeInst = dyn_cast<StoreInst>(I)) {
+      Value *value = storeInst->getValueOperand();
+      Value *pointer = storeInst->getPointerOperand();
+
       // 3. Assign a var to another var
-      else if (isInTaintSet(value)) {
+      if (isInTaintSet(value)) {
         // Variable is tainted if assigned by a tainted var
         taintSet.insert(pointer);
         debug << "-------------Assigned variable " << pointer->getName() << " tainted by " << value->getName() << "-------------\n";
       } else if (isStraightLine(storeInst)) {
-        // Variable is untainted if assigned by a untainted var and in straight line code
+        // Variable is untainted if assigned by an untainted var and in straight line code
         taintSet.erase(pointer);
         debug << "-------------Assigned variable " << pointer->getName() << " untainted by " << value->getName() << "-------------\n";
       }
 
     }
 
-    // 4. Load from var to another var
+    // Load Instruction
     else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
       Value *pointer = loadIns->getPointerOperand();
 
+      // 4. Load from var to another var
       if (isInTaintSet(pointer)) {
         // Variable is tainted if loaded from a tainted var
         taintSet.insert(loadIns);
         debug << "-------------Loaded variable " << loadIns->getName() << " tainted by " << pointer->getName() << "-------------\n";
       } else if (isStraightLine(loadIns)) {
-        // Variable is untainted if assigned by a untainted var and in straight line code
+        // Variable is untainted if loaded from an untainted var and in straight line code
         taintSet.erase(loadIns);
         debug << "-------------Loaded variable " << loadIns->getName() << " untainted by " << pointer->getName() << "-------------\n";
       }
