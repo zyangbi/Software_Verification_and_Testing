@@ -1,18 +1,18 @@
-// Multiple iterations
+// A function that contains loop
 
 #include <iostream>
 
 using namespace std;
 
-int add_func(int a, int b) {
-  return a + b;
-}
-
 int main() {
   int x = 0;
-  int y = 1;
-  int z;
-  cin >> z;               //Tainted = {z}
-  z = add_func(x, y);     //Tainted = {}
-  return 0;               //Tainted = {}
+  cin >> x;               // Tainted = {x}
+  int y;
+
+  for (int i = 0; i < y; i++) {
+    y = y * 2;            // Tainted = {x} -> {x, y}
+    y = x;                // Tainted = {x, y}
+  }
+
+  return 0;               // Tainted = {x, y}
 }

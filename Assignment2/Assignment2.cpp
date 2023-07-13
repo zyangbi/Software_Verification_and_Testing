@@ -69,33 +69,46 @@ public:
     }
     printSet(decVarSet);
     
-    // Update entrySet and exitSet
-    for (auto b : topoSortBBs(F)) {
-      taintSet.clear();
+    bool change = true;
+    // Chaotic iteration, loop until all entrySet and exitSet don't change
+    while (change) {
+      change = false;
+      for (auto b : topoSortBBs(F)) {
+        taintSet.clear();
 
-      // EntrySet of a basic block is the union of all exitSets of the predecessors
-      for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
-        unordered_set<Value *> predExitSet = exitSetMap[*pred_it];
-        taintSet.insert(predExitSet.begin(), predExitSet.end());
+        // EntrySet of a basic block is the union of all exitSets of the predecessors
+        for (auto pred_it = pred_begin(b); pred_it != pred_end(b); ++ pred_it) {
+          unordered_set<Value *> predExitSet = exitSetMap[*pred_it];
+          taintSet.insert(predExitSet.begin(), predExitSet.end());
+        }
+
+        // If entrySet is different from previous entrySet, set flag and update exitSetMap
+        if (taintSet != entrySetMap[b]) {
+          change = true;
+          entrySetMap[b] = taintSet;
+        }
+
+        // Iterate over all the instructions within a basic block, update taintSet. 
+        for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
+          debug << "\n";
+
+          Instruction *ins = const_cast<llvm::Instruction *>(&*It);
+          checkTainted(ins);
+
+          ins->print(debug);
+          debug << "\n";
+          printSet(taintSet);        
+        }
+
+        // If exitSet is different from previous exitSet, set flag and update exitSetMap
+        if (taintSet != exitSetMap[b]) {
+          change = true;
+          exitSetMap[b] = taintSet;
+        }
       }
-
-      // Iterate over all the instructions within a basic block, update taintSet. 
-      for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
-        debug << "\n";
-
-        Instruction *ins = const_cast<llvm::Instruction *>(&*It);
-        checkTainted(ins);
-
-        ins->print(debug);
-        debug << "\n";
-        printSet(taintSet);        
-      }
-
-      // Save final taintSet into exitSetMap
-      exitSetMap[b] = taintSet;
     }
 
-    // Print final taintSet
+    // Print final taintSet(exitSet)
     output << "Tainted: ";
     outputTaintSet();
 
@@ -121,7 +134,7 @@ private:
   unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
   unordered_set<BasicBlock *> straightLineBBs;
 
-  //
+  // Get the set of user decleared variables. These vars should be printed out.
   void getDecVarSet(Instruction *I) {
     if (AllocaInst *allocaInst = dyn_cast<AllocaInst>(I)) {
       if (allocaInst->getName().str() != "retval") {
