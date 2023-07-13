@@ -19,7 +19,7 @@ using namespace std;
 // Comment out the line below to turn off all debug statements.
 // **Note** For final submission of this assignment,
 //          please comment out the line below.
-#define __DEBUG__
+// #define __DEBUG__
 
 // Output strings for debugging
 std::string debug_str;
@@ -57,9 +57,19 @@ public:
       debug << "\n\n ------------getStraightLineBBs Fail-----------------";
       return false;
     }
+
+    // Get decVarSet
+    decVarSet.clear();
+    for (auto b : topoSortBBs(F)) {
+      // Iterate over all the instructions within a basic block, get decVarSet. 
+      for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
+        Instruction *ins = const_cast<llvm::Instruction *>(&*It);
+        getDecVarSet(ins);
+      }
+    }
+    printSet(decVarSet);
     
-    // while (1) {
-    // Iterate through basic blocks of the function.
+    // Update entrySet and exitSet
     for (auto b : topoSortBBs(F)) {
       taintSet.clear();
 
@@ -69,29 +79,25 @@ public:
         taintSet.insert(predExitSet.begin(), predExitSet.end());
       }
 
-
       // Iterate over all the instructions within a basic block, update taintSet. 
       for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
-        
         debug << "\n";
 
-
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
-        checkTainted(ins, b);
-
+        checkTainted(ins);
 
         ins->print(debug);
         debug << "\n";
-        printTaintSet();        
+        printSet(taintSet);        
       }
 
       // Save final taintSet into exitSetMap
       exitSetMap[b] = taintSet;
     }
-    // }
 
-    // Print tainted variables in the last taintSet
-    // printTaintSet();
+    // Print final taintSet
+    output << "Tainted: ";
+    outputTaintSet();
 
     // Print debug string if __DEBUG__ is enabled.
     #ifdef __DEBUG__
@@ -110,20 +116,32 @@ public:
 
 private:
   unordered_set<Value *> taintSet;
+  unordered_set<Value *> decVarSet;
   unordered_map<BasicBlock *, unordered_set<Value *>> entrySetMap;
   unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
   unordered_set<BasicBlock *> straightLineBBs;
 
-  // Complete this function.
-  void checkTainted(Instruction *I, BasicBlock *b) {
+  //
+  void getDecVarSet(Instruction *I) {
+    if (AllocaInst *allocaInst = dyn_cast<AllocaInst>(I)) {
+      if (allocaInst->getName().str() != "retval") {
+        debug << "-------------Declared variable " << allocaInst->getName() << " -------------\n";
+        decVarSet.insert(allocaInst);
+      }
+    }
+  }
+
+  // Check tainted and untainted variables on each instruction
+  void checkTainted(Instruction *I) {
 
     // Call Instruction
-    if (CallInst* callInst = dyn_cast<CallInst>(I)) {
+    if (CallInst *callInst = dyn_cast<CallInst>(I)) {
       // 1. Return value of cin is tainted
       if (callInst->getOperand(0)->getName().str().find("cin") != string::npos) {
         Value* input = callInst->getOperand(1);
-        taintSet.insert(input);
         debug << "-------------Variable " << input->getName() << " tainted by cin-------------\n";
+        printTaintedLine(input, I);
+        taintSet.insert(input);
       }
 
       // 2. Return value of a function call
@@ -139,33 +157,36 @@ private:
 
         if (tainted) {
           // Return value is tainted if any argument is tainted
-          taintSet.insert(callInst);
           debug << "-------------Return value " << callInst->getName() << " is tainted by function call " << "--------------\n";
+          printTaintedLine(callInst, I);
+          taintSet.insert(callInst);
         } else if (isStraightLine(callInst)) {
           // Return value is untainted if all arguments are not tainted and in straigt line code
-          taintSet.erase(callInst);
           debug << "-------------Return value " << callInst->getName() << " is untainted by function call " << "--------------\n";
+          printUntaintedLine(callInst, I);
+          taintSet.erase(callInst);
         }
       }
 
     }
 
     // Store Instruction
-    else if (StoreInst* storeInst = dyn_cast<StoreInst>(I)) {
+    else if (StoreInst *storeInst = dyn_cast<StoreInst>(I)) {
       Value *value = storeInst->getValueOperand();
       Value *pointer = storeInst->getPointerOperand();
 
       // 3. Assign a var to another var
       if (isInTaintSet(value)) {
         // Variable is tainted if assigned by a tainted var
-        taintSet.insert(pointer);
         debug << "-------------Assigned variable " << pointer->getName() << " tainted by " << value->getName() << "-------------\n";
+        printTaintedLine(pointer, I);
+        taintSet.insert(pointer);
       } else if (isStraightLine(storeInst)) {
         // Variable is untainted if assigned by an untainted var and in straight line code
-        taintSet.erase(pointer);
         debug << "-------------Assigned variable " << pointer->getName() << " untainted by " << value->getName() << "-------------\n";
+        printUntaintedLine(pointer, I);
+        taintSet.erase(pointer);
       }
-
     }
 
     // Load Instruction
@@ -175,12 +196,14 @@ private:
       // 4. Load from var to another var
       if (isInTaintSet(pointer)) {
         // Variable is tainted if loaded from a tainted var
-        taintSet.insert(loadIns);
         debug << "-------------Loaded variable " << loadIns->getName() << " tainted by " << pointer->getName() << "-------------\n";
+        printTaintedLine(loadIns, I);
+        taintSet.insert(loadIns);
       } else if (isStraightLine(loadIns)) {
         // Variable is untainted if loaded from an untainted var and in straight line code
-        taintSet.erase(loadIns);
         debug << "-------------Loaded variable " << loadIns->getName() << " untainted by " << pointer->getName() << "-------------\n";
+        printUntaintedLine(loadIns, I);
+        taintSet.erase(loadIns);
       }
     } 
 
@@ -203,13 +226,46 @@ private:
     return false;
   }
 
-  void printTaintSet() {
-    debug << "{";
-    for (Value *taint : taintSet) {
-      string taintName = taint->getName().str();
-      if (!taintName.empty()) {
-        debug << taintName << ",";
+  void outputTaintSet() {
+    output << "{";
+    bool first = true;
+    for (Value *element : taintSet) {
+      if (isInDecVarSet(element)) {
+        if (!first) {
+          output << ",";
+        }
+        output << element->getName();
+        first = false;
       }
+    }
+    output << "}\n\n";
+  }
+
+  void printTaintedLine(Value *var, Instruction *I) {
+    if (isInDecVarSet(var) && !isInTaintSet(var)) {
+      output << "Line " << getSourceCodeLine(I) << ": " << var->getName() << " is tainted\n";
+    }
+  }
+
+  void printUntaintedLine(Value *var, Instruction *I) {
+    if (isInDecVarSet(var) && isInTaintSet(var)) {
+      output << "Line " << getSourceCodeLine(I) << ": " << var->getName() << " is now untainted\n";
+    }
+  }
+  
+  bool isInDecVarSet(Value *variable) {
+    return decVarSet.find(variable) != decVarSet.end();
+  }
+
+  void printSet(unordered_set<Value *> &set) {
+    debug << "{";
+    bool first = true;
+    for (Value *element : set) {
+      if (!first) {
+        debug << ",";
+      }
+      debug << element->getName();
+      first = false;
     }
     debug << "}\n\n";
   }
