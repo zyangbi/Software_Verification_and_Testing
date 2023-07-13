@@ -4,3 +4,4 @@ Tutorial2-LLVM_Demo.md
 *.dot
 HelloWorld*
 HeapSort*
+.vscode

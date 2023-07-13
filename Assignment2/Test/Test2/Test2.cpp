@@ -19,6 +19,7 @@ int main() {
   cin >> z;               //Tainted = {z}
   z = add_func(x, y);     //Tainted = {}
   int a;
+  cin >> a;
   a = multi_func(x, y, z);
   return 0;               //Tainted = {}
 }

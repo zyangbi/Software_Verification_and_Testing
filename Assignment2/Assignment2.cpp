@@ -49,6 +49,14 @@ public:
     if (funcName != "main") {
       return false;
     }
+
+    // Get straight line basic blocks using dominator tree
+    straightLineBBs.clear();
+    DominatorTree &domTree = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    if (!getStraightLineBBs(F, domTree)) { // result saves to straightLineBBs
+      debug << "\n\n ------------getStraightLineBBs Fail-----------------";
+      return false;
+    }
     
     // while (1) {
     // Iterate through basic blocks of the function.
@@ -65,7 +73,7 @@ public:
       // Iterate over all the instructions within a basic block, update taintSet. 
       for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
         
-        debug << "\n\n";
+        debug << "\n";
 
 
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
@@ -109,12 +117,12 @@ private:
   // Complete this function.
   void checkTainted(Instruction *I, BasicBlock *b) {
 
-    // Load from cin (pointer)
+    // 1. Variable loaded from cin is tainted
     if (CallInst* callInst = dyn_cast<CallInst>(I)) {
       if (callInst->getOperand(0)->getName().str().find("cin") != string::npos) {
         Value* input = callInst->getOperand(1);
         taintSet.insert(input);
-        debug << "A var was just tainted due to cin: " << input->getName() << "\n";
+        debug << "-------------Variable " << input->getName() << " tainted by cin-------------\n";
       }
     }
 
@@ -123,50 +131,54 @@ private:
       Value *pointer = storeInst->getPointerOperand();
 
       // 2. Assign return value of a function call to another var
-      // If any argument is tainted, assigned var is tainted; otherwise, assigned var is untainted.
       if (CallInst *callInst = dyn_cast<CallInst>(value)) {
         bool tainted = false;
-        Value *arg;
         for (auto argIt = callInst->arg_begin(); argIt != callInst->arg_end(); ++argIt) {
-          arg = *argIt;
+          Value *arg = *argIt;
           if (isInTaintSet(arg)) {
             tainted = true;
             break;
           }
         }
+
         if (tainted) {
+          // Assigned var is tainted if any argument is tainted
           taintSet.insert(pointer);
-          debug << "Return value " << callInst->getName() << " tainted by " << arg->getName() << "\n";
+          debug << "-------------Return value " << pointer->getName() << " tainted by function call " << value->getName() << "--------------\n";
+        } else if (isStraightLine(storeInst)) {
+          // Assigned var is untainted if all arguments are not tainted and in straigt line code
+          taintSet.erase(pointer);
+          debug << "-------------Return value " << pointer->getName() << " untainted by function call " << value->getName() << "--------------\n";
         }
       }
 
-      // 3. Assign a tainted var to another var
-      if (isInTaintSet(value)) {
+      // 3. Assign a var to another var
+      else if (isInTaintSet(value)) {
+        // Variable is tainted if assigned by a tainted var
         taintSet.insert(pointer);
-        debug << "Tainted variable " << value->getName() << " stored to " << pointer->getName() << "\n";
+        debug << "-------------Assigned variable " << pointer->getName() << " tainted by " << value->getName() << "-------------\n";
+      } else if (isStraightLine(storeInst)) {
+        // Variable is untainted if assigned by a untainted var and in straight line code
+        taintSet.erase(pointer);
+        debug << "-------------Assigned variable " << pointer->getName() << " untainted by " << value->getName() << "-------------\n";
       }
-      
-      // else {
-        // // debug << "7\n";
-        // if (isInTaintSet(pointer)) {
-        //   // untainting a variable
-        //   // debug << "8\n";
-        //   taintSet.erase(pointer);
-        //   debug << "Tainted variable " << pointer->getName() << "is now untainted by assigning " << value->getName() << " to it." << "\n";
-        // }
-      // }
-    } // if StroeInst
 
-    // 4. load from a tainted var to another
+    }
+
+    // 4. Load from var to another var
     else if (LoadInst *loadIns = dyn_cast<LoadInst>(I)) {
       Value *pointer = loadIns->getPointerOperand();
 
-
       if (isInTaintSet(pointer)) {
+        // Variable is tainted if loaded from a tainted var
         taintSet.insert(loadIns);
-        debug << "Tainted variable " << pointer->getName() << " loaded to " << loadIns->getName() << "\n";
+        debug << "-------------Loaded variable " << loadIns->getName() << " tainted by " << pointer->getName() << "-------------\n";
+      } else if (isStraightLine(loadIns)) {
+        // Variable is untainted if assigned by a untainted var and in straight line code
+        taintSet.erase(loadIns);
+        debug << "-------------Loaded variable " << loadIns->getName() << " untainted by " << pointer->getName() << "-------------\n";
       }
-    } // if loadInst
+    } 
 
     return;
   } //checkTainted
