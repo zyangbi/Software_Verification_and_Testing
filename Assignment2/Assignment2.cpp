@@ -58,13 +58,13 @@ public:
       return false;
     }
 
-    // Get decVarSet
+    // Get user declared variables
     decVarSet.clear();
     for (auto b : topoSortBBs(F)) {
       // Iterate over all the instructions within a basic block, get decVarSet. 
       for (BasicBlock::const_iterator It = b->begin(); It != b->end(); ++It) {
         Instruction *ins = const_cast<llvm::Instruction *>(&*It);
-        getDecVarSet(ins);
+        checkDecVar(ins);
       }
     }
     printSet(decVarSet);
@@ -133,16 +133,6 @@ private:
   unordered_map<BasicBlock *, unordered_set<Value *>> entrySetMap;
   unordered_map<BasicBlock *, unordered_set<Value *>> exitSetMap;
   unordered_set<BasicBlock *> straightLineBBs;
-
-  // Get the set of user decleared variables. These vars should be printed out.
-  void getDecVarSet(Instruction *I) {
-    if (AllocaInst *allocaInst = dyn_cast<AllocaInst>(I)) {
-      if (allocaInst->getName().str() != "retval") {
-        debug << "-------------Declared variable " << allocaInst->getName() << " -------------\n";
-        decVarSet.insert(allocaInst);
-      }
-    }
-  }
 
   // Check tainted and untainted variables on each instruction
   void checkTainted(Instruction *I) {
@@ -265,6 +255,16 @@ private:
       output << "Line " << getSourceCodeLine(I) << ": " << var->getName() << " is now untainted\n";
     }
   }
+
+  // Get the set of user decleared variables. These vars should be printed out.
+  void checkDecVar(Instruction *I) {
+    if (AllocaInst *allocaInst = dyn_cast<AllocaInst>(I)) {
+      if (allocaInst->getName().str() != "retval") {
+        debug << "-------------Declared variable " << allocaInst->getName() << " -------------\n";
+        decVarSet.insert(allocaInst);
+      }
+    }
+  }
   
   bool isInDecVarSet(Value *variable) {
     return decVarSet.find(variable) != decVarSet.end();
@@ -281,6 +281,49 @@ private:
       first = false;
     }
     debug << "}\n\n";
+  }
+
+  // Get all BBs with straight lines
+  bool getStraightLineBBs(Function &F, DominatorTree &domTree) {
+    BasicBlock &entryBlock = F.getEntryBlock();
+    BasicBlock &exitBlock = F.back();
+
+    vector<BasicBlock *> path;
+    if (backtraceDomTree(&entryBlock, domTree, &exitBlock, path)) {
+      straightLineBBs.insert(path.begin(), path.end());
+      return true;
+    }
+    return false;
+  }
+
+  // Backtrace domTree to get the path from entryBlock to exitBlock, which contains all straight line blocks.
+  bool backtraceDomTree(BasicBlock *block, DominatorTree &domTree, BasicBlock *exitBlock, vector<BasicBlock *> &path) {
+    if (!block) {
+      return false;
+    }
+
+    if (block == exitBlock) {
+      path.push_back(block);
+      return true;
+    }
+    
+    DomTreeNode *node = domTree.getNode(block);
+    if (node && !node->children().empty()) {
+      for (DomTreeNode *childNode : node->children()) {
+        path.push_back(node->getBlock());
+        if (backtraceDomTree(childNode->getBlock(), domTree, exitBlock, path)) {
+          return true;
+        }
+        path.pop_back();
+      }
+    }
+    return false;
+  }
+
+  // Check if an instruction is straight line
+  bool isStraightLine(Instruction *I) {
+    BasicBlock* block = I->getParent();
+    return straightLineBBs.count(block);
   }
 
   // Reset all global variables when a new function is called.
@@ -333,49 +376,6 @@ private:
 
     reverse(tempBB.begin(), tempBB.end());
     return tempBB;
-  }
-
-  // Get all BBs with straight lines
-  bool getStraightLineBBs(Function &F, DominatorTree &domTree) {
-    BasicBlock &entryBlock = F.getEntryBlock();
-    BasicBlock &exitBlock = F.back();
-
-    vector<BasicBlock *> path;
-    if (backtraceDomTree(&entryBlock, domTree, &exitBlock, path)) {
-      straightLineBBs.insert(path.begin(), path.end());
-      return true;
-    }
-    return false;
-  }
-
-  // Backtrace domTree to get the path from entryBlock to exitBlock, which contains all straight line blocks.
-  bool backtraceDomTree(BasicBlock *block, DominatorTree &domTree, BasicBlock *exitBlock, vector<BasicBlock *> &path) {
-    if (!block) {
-      return false;
-    }
-
-    if (block == exitBlock) {
-      path.push_back(block);
-      return true;
-    }
-    
-    DomTreeNode *node = domTree.getNode(block);
-    if (node && !node->children().empty()) {
-      for (DomTreeNode *childNode : node->children()) {
-        path.push_back(node->getBlock());
-        if (backtraceDomTree(childNode->getBlock(), domTree, exitBlock, path)) {
-          return true;
-        }
-        path.pop_back();
-      }
-    }
-    return false;
-  }
-
-  // Check if an instruction is straight line
-  bool isStraightLine(Instruction *I) {
-    BasicBlock* block = I->getParent();
-    return straightLineBBs.count(block);
   }
 
 }; // Assignment2
